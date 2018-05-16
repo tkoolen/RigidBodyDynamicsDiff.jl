@@ -72,7 +72,7 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
     k = JointID(l) # FIXME
     jₗ = Twist(state.motion_subspaces.data.data[1][k.value], SVector(1.0)) # jₗ?
     if compute_transforms
-        RigidBodyDynamics.update_transforms!(state)
+        # RigidBodyDynamics.update_transforms!(state)
         dtransforms_to_root = jacstate.transforms_to_root
         @inbounds for i in state.treejointids
             κᵢ = state.ancestor_joint_masks[i]
@@ -88,7 +88,7 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
     end
 
     if compute_motion_subspaces
-        RigidBodyDynamics.update_motion_subspaces!(state)
+        # RigidBodyDynamics.update_motion_subspaces!(state)
         dJw = jacstate.motion_subspaces.data.data[1]
         @inbounds for i in state.treejointids
             κᵢ = state.ancestor_joint_masks[i]
@@ -104,7 +104,7 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
     end
 
     if compute_inertias
-        RigidBodyDynamics.update_spatial_inertias!(state)
+        # RigidBodyDynamics.update_spatial_inertias!(state)
         dinertias = jacstate.inertias
         @inbounds for i in state.treejointids
             κᵢ = state.ancestor_joint_masks[i]
@@ -120,7 +120,7 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
     end
 
     if compute_crb_inertias
-        RigidBodyDynamics.update_crb_inertias!(state)
+        # RigidBodyDynamics.update_crb_inertias!(state)
         dcrbinertias = jacstate.crb_inertias
         κₖ = state.ancestor_joint_masks[k]
         @inbounds for i in state.treejointids
@@ -146,18 +146,28 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
     jacstate
 end
 
-function mass_matrix_jacobian!(Mjac::Matrix, state::MechanismState, jacstate::MechanismState, jacresult::DynamicsResult)
+function mass_matrix_jacobian!(Mjac::Matrix, state::MechanismState, jacstates::Vector{<:MechanismState}, jacresults::Vector{<:DynamicsResult})
     nq = num_positions(state)
     nv = num_velocities(state)
+    RigidBodyDynamics.update_motion_subspaces!(state)
+    RigidBodyDynamics.update_crb_inertias!(state)
+    if !(Threads.nthreads() === length(jacstates) === length(jacresults))
+        error("The lengths of the jacstates and jacresults vectors must be equal to the number of threads.")
+    end
     @boundscheck size(Mjac) === (nv^2, nq) || throw(DimensionMismatch())
-    jacindex = 1
-    for qindex = 1 : nq
-        configuration_jacobian_init!(jacstate, state, qindex, false, true, false, true)
-        mass_matrix!(jacresult, jacstate)
-        M_dual = jacresult.massmatrix
-        @inbounds for i in eachindex(M_dual)
-            Mjac[jacindex] = ForwardDiff.partials(M_dual[i])[1]
-            jacindex += 1
+    let Mjac = Mjac, state = state, jacstates = jacstates, jacresults = jacresults, nq = nq
+        Threads.@threads for qindex = 1 : nq
+            id = Threads.threadid()
+            @inbounds jacstate = jacstates[id]
+            @inbounds jacresult = jacresults[id]
+            configuration_jacobian_init!(jacstate, state, qindex, false, true, false, true)
+            mass_matrix!(jacresult, jacstate)
+            M_dual = jacresult.massmatrix
+            jacindex = (qindex - 1) * size(Mjac, 1)
+            @inbounds for i in eachindex(M_dual)
+                jacindex += 1
+                Mjac[jacindex] = ForwardDiff.partials(M_dual[i])[1]
+            end
         end
     end
 end
