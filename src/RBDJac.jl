@@ -13,13 +13,13 @@ using RigidBodyDynamics: successorid, isdirty, Spatial.colwise, Spatial.hat
 
 # TODO:
 # * tagged Duals
-# * need mapping from q index / v index to JointID
-# * decouple number of threads from number of degrees of freedom
+# * need mapping from q index / v index to JointID (stored as `Vector{JointID}` in `MechanismState`)
+# * frame checks for timederiv methods
 
 function timederiv(H::Transform3D, twist::Twist)
-#     @framecheck H.from twist.body
-#     @framecheck H.to twist.base # TODO
-#     @framecheck twist.frame twist.base # TODO
+    @framecheck H.from twist.body
+    @framecheck H.to twist.base
+    @framecheck twist.frame twist.base
     R = rotation(H)
     p = translation(H)
     ω = angular(twist)
@@ -31,7 +31,8 @@ function timederiv(H::Transform3D, twist::Twist)
 end
 
 function timederiv(J::GeometricJacobian, twist::Twist)
-    # TODO: frame checks
+    # TODO: more frame checks needed?
+    @framecheck J.frame twist.frame
     ω = angular(twist)
     v = linear(twist)
     Jω = angular(J)
@@ -42,7 +43,8 @@ function timederiv(J::GeometricJacobian, twist::Twist)
 end
 
 function timederiv(inertia::SpatialInertia, twist::Twist)
-    # TODO: frame checks
+    # TODO: more frame checks needed?
+    @framecheck inertia.frame twist.frame
     ω = angular(twist)
     v = linear(twist)
     Iω = inertia.moment
