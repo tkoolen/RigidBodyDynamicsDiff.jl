@@ -81,10 +81,10 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
         # RigidBodyDynamics.update_transforms!(state)
         dtransforms_to_root = jacstate.transforms_to_root
         @inbounds for i in state.treejointids
-            κᵢ = state.ancestor_joint_masks[i]
+            κ_i = state.ancestor_joint_masks[i]
             bodyid = successorid(i, state)
             H = transform_to_root(state, bodyid)
-            if κᵢ[k]
+            if κ_i[k]
                 dtransforms_to_root[bodyid] = timederiv(H, j_l)
             else
                 dtransforms_to_root[bodyid] = H
@@ -96,13 +96,13 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
     if compute_motion_subspaces
         # RigidBodyDynamics.update_motion_subspaces!(state)
         @inbounds for i in state.treejointids
-            κᵢ = state.ancestor_joint_masks[i]
+            κ_i = state.ancestor_joint_masks[i]
             bodyid = successorid(i, state)
-            Jᵢ = state.motion_subspaces.data[i.value] # FIXME: should be a v index
-            if κᵢ[k]
-                jacstate.motion_subspaces.data[i] = timederiv(Jᵢ, j_l)
+            J_i = state.motion_subspaces.data[i.value] # FIXME: should be a v index
+            if κ_i[k]
+                jacstate.motion_subspaces.data[i] = timederiv(J_i, j_l)
             else
-                jacstate.motion_subspaces.data[i] = Jᵢ
+                jacstate.motion_subspaces.data[i] = J_i
             end
         end
         jacstate.motion_subspaces.dirty = false
@@ -112,13 +112,13 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
         # RigidBodyDynamics.update_spatial_inertias!(state)
         dinertias = jacstate.inertias
         @inbounds for i in state.treejointids
-            κᵢ = state.ancestor_joint_masks[i]
+            κ_i = state.ancestor_joint_masks[i]
             bodyid = successorid(i, state)
-            Iᵢ = state.inertias[bodyid]
-            if κᵢ[k]
-                dinertias[bodyid] = timederiv(Iᵢ, j_l)
+            I_i = state.inertias[bodyid]
+            if κ_i[k]
+                dinertias[bodyid] = timederiv(I_i, j_l)
             else
-                dinertias[bodyid] = Iᵢ
+                dinertias[bodyid] = I_i
             end
         end
         jacstate.inertias.dirty = false
@@ -129,20 +129,20 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
         dcrbinertias = jacstate.crb_inertias
         κ_k = state.ancestor_joint_masks[k]
         @inbounds for i in state.treejointids
-            κᵢ = state.ancestor_joint_masks[i]
+            κ_i = state.ancestor_joint_masks[i]
             bodyid = successorid(i, state)
-            Icᵢ = state.crb_inertias[bodyid]
-            if κᵢ[k] || κ_k[i]
+            Ic_i = state.crb_inertias[bodyid]
+            if κ_i[k] || κ_k[i]
                 p = max(i, k)
                 Ic_p = state.crb_inertias[successorid(p, state)]
                 Ic_p_dual = timederiv(Ic_p, j_l)
                 Dual = ForwardDiff.Dual
-                Iω = map(Dual, Icᵢ.moment, map(ForwardDiff.partials, Ic_p_dual.moment))
-                mc = map(Dual, Icᵢ.cross_part, map(ForwardDiff.partials, Ic_p_dual.cross_part))
-                m = Dual(Icᵢ.mass, ForwardDiff.partials(Ic_p_dual.mass))
-                dcrbinertias[bodyid] = SpatialInertia(Icᵢ.frame, Iω, mc, m)
+                Iω = map(Dual, Ic_i.moment, map(ForwardDiff.partials, Ic_p_dual.moment))
+                mc = map(Dual, Ic_i.cross_part, map(ForwardDiff.partials, Ic_p_dual.cross_part))
+                m = Dual(Ic_i.mass, ForwardDiff.partials(Ic_p_dual.mass))
+                dcrbinertias[bodyid] = SpatialInertia(Ic_i.frame, Iω, mc, m)
             else
-                dcrbinertias[bodyid] = Icᵢ
+                dcrbinertias[bodyid] = Ic_i
             end
         end
         jacstate.crb_inertias.dirty = false
