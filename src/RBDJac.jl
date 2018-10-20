@@ -3,14 +3,18 @@ module RBDJac
 export
     mass_matrix_jacobian!
 
-using Compat
 using RigidBodyDynamics
 using ForwardDiff
+using LinearAlgebra
 using StaticArrays
-using Parameters
 
-import ForwardDiff: Dual
-import RigidBodyDynamics: successorid, isdirty, Spatial.colwise, Spatial.hat
+using ForwardDiff: Dual
+using RigidBodyDynamics: successorid, isdirty, Spatial.colwise, Spatial.hat
+
+# TODO:
+# * tagged Duals
+# * need mapping from q index / v index to JointID
+# * decouple number of threads from number of degrees of freedom
 
 function timederiv(H::Transform3D, twist::Twist)
 #     @framecheck H.from twist.body
@@ -60,7 +64,7 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
         num_positions(state) === num_velocities(state) || error() # FIXME
         length(joints(state.mechanism)) === num_velocities(state) || error() # FIXME
         length(state.treejoints.data) === 1 || error() # FIXME
-        mapreduce(has_fixed_subspaces, &, true, state.treejoints) || error()
+        mapreduce(has_fixed_subspaces, &, state.treejoints, init=true) || error()
     end
 
     setdirty!(jacstate)
@@ -70,7 +74,7 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
     jacstate.q[l] = ForwardDiff.Dual(state.q[l], one(T))
 
     k = JointID(l) # FIXME
-    jₗ = Twist(state.motion_subspaces.data.data[1][k.value], SVector(1.0)) # jₗ?
+    j_l = Twist(state.motion_subspaces.data[l], SVector(one(T))) # j_l?
     if compute_transforms
         # RigidBodyDynamics.update_transforms!(state)
         dtransforms_to_root = jacstate.transforms_to_root
@@ -79,7 +83,7 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
             bodyid = successorid(i, state)
             H = transform_to_root(state, bodyid)
             if κᵢ[k]
-                dtransforms_to_root[bodyid] = timederiv(H, jₗ)
+                dtransforms_to_root[bodyid] = timederiv(H, j_l)
             else
                 dtransforms_to_root[bodyid] = H
             end
@@ -89,15 +93,14 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
 
     if compute_motion_subspaces
         # RigidBodyDynamics.update_motion_subspaces!(state)
-        dJw = jacstate.motion_subspaces.data.data[1]
         @inbounds for i in state.treejointids
             κᵢ = state.ancestor_joint_masks[i]
             bodyid = successorid(i, state)
-            Jᵢ = state.motion_subspaces.data.data[1][i.value] # FIXME
+            Jᵢ = state.motion_subspaces.data[i.value] # FIXME: should be a v index
             if κᵢ[k]
-                dJw[i] = timederiv(Jᵢ, jₗ)
+                jacstate.motion_subspaces.data[i] = timederiv(Jᵢ, j_l)
             else
-                dJw[i] = Jᵢ
+                jacstate.motion_subspaces.data[i] = Jᵢ
             end
         end
         jacstate.motion_subspaces.dirty = false
@@ -111,7 +114,7 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
             bodyid = successorid(i, state)
             Iᵢ = state.inertias[bodyid]
             if κᵢ[k]
-                dinertias[bodyid] = timederiv(Iᵢ, jₗ)
+                dinertias[bodyid] = timederiv(Iᵢ, j_l)
             else
                 dinertias[bodyid] = Iᵢ
             end
@@ -122,19 +125,19 @@ function configuration_jacobian_init!(jacstate::MechanismState{D}, state::Mechan
     if compute_crb_inertias
         # RigidBodyDynamics.update_crb_inertias!(state)
         dcrbinertias = jacstate.crb_inertias
-        κₖ = state.ancestor_joint_masks[k]
+        κ_k = state.ancestor_joint_masks[k]
         @inbounds for i in state.treejointids
             κᵢ = state.ancestor_joint_masks[i]
             bodyid = successorid(i, state)
             Icᵢ = state.crb_inertias[bodyid]
-            if κᵢ[k] || κₖ[i]
+            if κᵢ[k] || κ_k[i]
                 p = max(i, k)
-                Icₚ = state.crb_inertias[successorid(p, state)]
-                Icₚ_dual = timederiv(Icₚ, jₗ)
+                Ic_p = state.crb_inertias[successorid(p, state)]
+                Ic_p_dual = timederiv(Ic_p, j_l)
                 Dual = ForwardDiff.Dual
-                Iω = map(Dual, Icᵢ.moment, map(ForwardDiff.partials, Icₚ_dual.moment))
-                mc = map(Dual, Icᵢ.cross_part, map(ForwardDiff.partials, Icₚ_dual.cross_part))
-                m = Dual(Icᵢ.mass, ForwardDiff.partials(Icₚ_dual.mass))
+                Iω = map(Dual, Icᵢ.moment, map(ForwardDiff.partials, Ic_p_dual.moment))
+                mc = map(Dual, Icᵢ.cross_part, map(ForwardDiff.partials, Ic_p_dual.cross_part))
+                m = Dual(Icᵢ.mass, ForwardDiff.partials(Ic_p_dual.mass))
                 dcrbinertias[bodyid] = SpatialInertia(Icᵢ.frame, Iω, mc, m)
             else
                 dcrbinertias[bodyid] = Icᵢ
@@ -171,6 +174,5 @@ function mass_matrix_jacobian!(Mjac::Matrix, state::MechanismState, jacstates::V
         end
     end
 end
-
 
 end # module
