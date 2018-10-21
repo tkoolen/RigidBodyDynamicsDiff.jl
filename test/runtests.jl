@@ -5,6 +5,10 @@ using DiffResults
 using Random
 using Test
 
+@show Threads.nthreads()
+
+struct MyTag end
+
 @testset "mass_matrix_jacobian!" begin
     Random.seed!(1)
     urdf = joinpath(dirname(pathof(RigidBodyDynamics)), "..", "test", "urdf", "atlas.urdf")
@@ -29,12 +33,11 @@ using Test
     fdstate = MechanismState{eltype(config)}(mechanism)
     fdresult = DynamicsResult{eltype(config)}(mechanism)
     ForwardDiff.jacobian!(fdjacresult, mass_matrix_vec!, Mvec, q, config)
-    fdMjac = DiffResults.jacobian(fdjacresult);
+    fdMjac = DiffResults.jacobian(fdjacresult)
 
-    D = ForwardDiff.Dual{Nothing, Float64, 1}
-    jacstates = [MechanismState{D}(mechanism) for _ = 1 : Threads.nthreads()] # TODO: false sharing
-    jacresults = [DynamicsResult{D}(mechanism) for _ = 1 : Threads.nthreads()] # TODO: false sharing
+    cache = ConfigurationJacobianCache{MyTag}(state)
     Mjac = similar(fdMjac)
-    mass_matrix_jacobian!(Mjac, state, jacstates, jacresults)
+    mass_matrix_jacobian!(Mjac, cache)
+
     @test Mjac ≈ fdMjac atol = 1e-10
 end
