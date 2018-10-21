@@ -191,10 +191,15 @@ function mass_matrix_jacobian!(Mjac::Matrix, cache::ConfigurationJacobianCache)
             configuration_jacobian_init!(jacstate, state, qindex, false, true, false, true)
             mass_matrix!(jacresult, jacstate)
             M_dual = jacresult.massmatrix
-            jacindex = (qindex - 1) * size(Mjac, 1)
-            @inbounds for i in eachindex(M_dual)
-                jacindex += 1
-                Mjac[jacindex] = ForwardDiff.partials(M_dual[i], 1)
+            jacstart = (qindex - 1) * size(Mjac, 1)
+            @inbounds for col in 1 : nv
+                for row in col : nv
+                    u_index = (row - 1) * nv + col
+                    l_index = (col - 1) * nv + row
+                    val = ForwardDiff.partials(M_dual.data[l_index], 1)
+                    Mjac[jacstart + u_index] = val
+                    Mjac[jacstart + l_index] = val
+                end
             end
         end
     end
