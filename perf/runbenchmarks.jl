@@ -4,19 +4,18 @@ using BenchmarkTools
 using Random
 using Profile
 
-const ScalarType = Float64
-# const ScalarType = Float32
-
 struct MyTag end
 
 function create_benchmark_suite()
+    # T = Float32
+    T = Float64
     suite = BenchmarkGroup()
     urdf = joinpath(dirname(pathof(RigidBodyDynamics)), "..", "test", "urdf", "atlas.urdf")
-    mechanism = parse_urdf(urdf)
-    state = MechanismState(mechanism)
+    mechanism = parse_urdf(urdf, scalar_type=T)
+    state = MechanismState{T}(mechanism)
     cache = ConfigurationJacobianCache{MyTag}(state)
     nq, nv = num_positions(mechanism), num_velocities(mechanism)
-    Mjac = zeros(nv * nv, nq)
+    Mjac = zeros(T, nv * nv, nq)
     suite["mass_matrix!"] = @benchmarkable begin
         setdirty!($state)
         mass_matrix_jacobian!($Mjac, $cache)
@@ -31,11 +30,6 @@ function runbenchmarks()
     Random.seed!(1)
     results = run(suite, verbose=true, overhead=overhead, gctrial=false)
     @show results
-    # for result in results
-    #     println("$(first(result)):")
-    #     display(last(result))
-    #     println()
-    # end
 end
 
 runbenchmarks()

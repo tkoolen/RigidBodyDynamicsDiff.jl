@@ -160,50 +160,61 @@ end
 function ConfigurationJacobianCache{Tag}(state::MechanismState{T}) where {Tag, T}
     D = ForwardDiff.Dual{Tag, T, 1}
     mechanism = state.mechanism
-    # TODO
-    # Decrease memory conflict by allocating each state and result on a separate thread
-    # See https://discourse.julialang.org/t/thread-safe-array-building/3275/8
-    # jacstates = Vector{typeof(MechanismState{D}(mechanism))}(undef, Threads.nthreads())
-    # jacresults = Vector{typeof(DynamicsResult{D}(mechanism))}(undef, Threads.nthreads())
-    # Threads.@threads for i in 1:Threads.nthreads()
-    #     jacstates[i] = MechanismState{D}(mechanism)
-    #     jacresults[i] = DynamicsResult{D}(mechanism)
-    # end
     jacstates = [MechanismState{D}(mechanism) for _ = 1 : Threads.nthreads()]
     jacresults = [DynamicsResult{D}(mechanism) for _ = 1 : Threads.nthreads()]
     ConfigurationJacobianCache(state, jacstates, jacresults)
 end
 
-function mass_matrix_jacobian!(Mjac::Matrix, cache::ConfigurationJacobianCache)
+function copy_jacobian_column!(dest::Matrix, src::Symmetric{<:Dual}, destcol::Integer)
+    deststart = (destcol - 1) * size(dest, 1)
+    n = size(src, 1)
+    upper = src.uplo === 'u'
+    @inbounds for col in 1 : n
+        for row in col : n
+            u_index = (row - 1) * n + col
+            l_index = (col - 1) * n + row
+            data_index = ifelse(upper, u_index, l_index)
+            val = ForwardDiff.partials(src.data[data_index], 1)
+            dest[deststart + u_index] = val
+            dest[deststart + l_index] = val
+        end
+    end
+end
+
+function mass_matrix_jacobian!(jac::Matrix, cache::ConfigurationJacobianCache)
     state = cache.state
     jacstates = cache.jacstates
     jacresults = cache.jacresults
     nq = num_positions(state)
     nv = num_velocities(state)
-    @boundscheck size(Mjac) === (nv^2, nq) || throw(DimensionMismatch())
+    @boundscheck size(jac) === (nv^2, nq) || throw(DimensionMismatch())
     update_motion_subspaces!(state)
     update_crb_inertias!(state)
-    let Mjac = Mjac, state = state, jacstates = jacstates, jacresults = jacresults, nq = nq
+    let jac = jac, state = state, jacstates = jacstates, jacresults = jacresults, nq = nq
         Threads.@threads for qindex in 1 : nq
             id = Threads.threadid()
             @inbounds jacstate = jacstates[id]
             @inbounds jacresult = jacresults[id]
             configuration_jacobian_init!(jacstate, state, qindex, false, true, false, true)
             mass_matrix!(jacresult, jacstate)
-            M_dual = jacresult.massmatrix
-            jacstart = (qindex - 1) * size(Mjac, 1)
-            @inbounds for col in 1 : nv
-                for row in col : nv
-                    u_index = (row - 1) * nv + col
-                    l_index = (col - 1) * nv + row
-                    val = ForwardDiff.partials(M_dual.data[l_index], 1)
-                    Mjac[jacstart + u_index] = val
-                    Mjac[jacstart + l_index] = val
-                end
-            end
+            copy_jacobian_column!(jac, jacresult.massmatrix, qindex)
         end
     end
-    Mjac
+    jac
 end
+
+# function dynamics_bias_jacobian!(jac::Matrix, cache::ConfigurationJacobianCache)
+#     state = cache.state
+#     jacstates = cache.jacstates
+#     jacresults = cache.jacresults
+#     nq = num_positions(state)
+#     nv = num_velocities(state)
+#     @boundscheck size(jac) === (nv, nq) || throw(DimensionMismatch())
+#     update_transforms!(state)
+#     update_twists_wrt_world!(state)
+#     update_bias_accelerations_wrt_world!(state)
+#     update_spatial_inertias!(state)
+
+# end
 
 end # module
