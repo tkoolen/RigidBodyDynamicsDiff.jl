@@ -160,14 +160,17 @@ end
 function ConfigurationJacobianCache{Tag}(state::MechanismState{T}) where {Tag, T}
     D = ForwardDiff.Dual{Tag, T, 1}
     mechanism = state.mechanism
+    # TODO
     # Decrease memory conflict by allocating each state and result on a separate thread
     # See https://discourse.julialang.org/t/thread-safe-array-building/3275/8
-    jacstates = Vector{typeof(MechanismState{D}(mechanism))}(undef, Threads.nthreads())
-    jacresults = Vector{typeof(DynamicsResult{D}(mechanism))}(undef, Threads.nthreads())
-    Threads.@threads for i in 1:Threads.nthreads()
-        jacstates[i] = MechanismState{D}(mechanism)
-        jacresults[i] = DynamicsResult{D}(mechanism)
-    end
+    # jacstates = Vector{typeof(MechanismState{D}(mechanism))}(undef, Threads.nthreads())
+    # jacresults = Vector{typeof(DynamicsResult{D}(mechanism))}(undef, Threads.nthreads())
+    # Threads.@threads for i in 1:Threads.nthreads()
+    #     jacstates[i] = MechanismState{D}(mechanism)
+    #     jacresults[i] = DynamicsResult{D}(mechanism)
+    # end
+    jacstates = [MechanismState{D}(mechanism) for _ = 1 : Threads.nthreads()]
+    jacresults = [DynamicsResult{D}(mechanism) for _ = 1 : Threads.nthreads()]
     ConfigurationJacobianCache(state, jacstates, jacresults)
 end
 
@@ -181,7 +184,7 @@ function mass_matrix_jacobian!(Mjac::Matrix, cache::ConfigurationJacobianCache)
     update_motion_subspaces!(state)
     update_crb_inertias!(state)
     let Mjac = Mjac, state = state, jacstates = jacstates, jacresults = jacresults, nq = nq
-        for qindex in Base.OneTo(nq)
+        Threads.@threads for qindex in 1 : nq
             id = Threads.threadid()
             @inbounds jacstate = jacstates[id]
             @inbounds jacresult = jacresults[id]
@@ -191,7 +194,7 @@ function mass_matrix_jacobian!(Mjac::Matrix, cache::ConfigurationJacobianCache)
             jacindex = (qindex - 1) * size(Mjac, 1)
             @inbounds for i in eachindex(M_dual)
                 jacindex += 1
-                Mjac[jacindex] = ForwardDiff.partials(M_dual[i])[1]
+                Mjac[jacindex] = ForwardDiff.partials(M_dual[i], 1)
             end
         end
     end
