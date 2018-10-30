@@ -5,14 +5,16 @@ using DiffResults
 using Random
 using Test
 
+using RigidBodyDynamics: velocity_to_configuration_derivative_jacobian
+
 @show Threads.nthreads()
 
 struct MyTag end
 
-@testset "mass_matrix_jacobian!" begin
+@testset "mass_matrix_differential!" begin
     Random.seed!(1)
     urdf = joinpath(dirname(pathof(RigidBodyDynamics)), "..", "test", "urdf", "atlas.urdf")
-    mechanism = parse_urdf(urdf)
+    mechanism = parse_urdf(urdf, root_joint_type=QuaternionFloating{Float64}())
     state = MechanismState(mechanism)
     result = DynamicsResult(mechanism)
     rand!(state)
@@ -35,9 +37,13 @@ struct MyTag end
     ForwardDiff.jacobian!(fdjacresult, mass_matrix_vec!, Mvec, q, config)
     fdMjac = DiffResults.jacobian(fdjacresult)
 
-    cache = ConfigurationJacobianCache{MyTag}(state)
-    Mjac = similar(fdMjac)
-    mass_matrix_jacobian!(Mjac, cache)
+    cache = DifferentialCache{MyTag}(state)
+    dM = Matrix{Float64}(undef, nv^2, nv)
+    mass_matrix_differential!(dM, cache)
 
-    @test Mjac ≈ fdMjac atol = 1e-10
+    @test dM ≈ fdMjac * velocity_to_configuration_derivative_jacobian(state) atol = 1e-10
+end
+
+@testset "benchmarks" begin
+    include(joinpath(@__DIR__, "..", "perf", "runbenchmarks.jl"))
 end
