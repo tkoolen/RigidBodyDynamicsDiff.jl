@@ -19,6 +19,7 @@ using ForwardDiff: Dual
 # TODO:
 # * need mapping from q index / v index to JointID (stored as `Vector{JointID}` in `MechanismState`)
 # * frame checks for timederiv methods
+# * create MechanismStates in separate threads (after making MechanismState construction threadsafe)
 
 function timederiv(H::Transform3D, twist::Twist, ::Type{Tag}) where Tag
     # @framecheck H.from twist.body
