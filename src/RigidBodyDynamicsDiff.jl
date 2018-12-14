@@ -1,4 +1,4 @@
-module RBDJac
+module RigidBodyDynamicsDiff
 
 export
     DifferentialCache,

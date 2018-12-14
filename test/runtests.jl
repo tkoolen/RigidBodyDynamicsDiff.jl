@@ -1,4 +1,4 @@
-using RBDJac
+using RigidBodyDynamicsDiff
 using RigidBodyDynamics
 using ForwardDiff
 using DiffResults

@@ -41,7 +41,7 @@ build_script:
 # Need to convert from shallow to complete for Pkg.clone to work
   - IF EXIST .git\shallow (git fetch --unshallow)
   - C:\projects\julia\bin\julia -e "versioninfo();
-      Pkg.clone(pwd(), \"RBDJac\"); Pkg.build(\"RBDJac\")"
+      Pkg.clone(pwd(), \"RigidBodyDynamicsDiff\"); Pkg.build(\"RigidBodyDynamicsDiff\")"
 
 test_script:
-  - C:\projects\julia\bin\julia -e "Pkg.test(\"RBDJac\")"
+  - C:\projects\julia\bin\julia -e "Pkg.test(\"RigidBodyDynamicsDiff\")"
