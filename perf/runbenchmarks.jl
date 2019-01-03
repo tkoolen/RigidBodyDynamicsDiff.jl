@@ -77,7 +77,7 @@ function create_benchmark_suite()
     dc = zeros(T, nv, nv)
     suite["dynamics_bias!"] = @benchmarkable begin
         setdirty!($state)
-        dynamics_bias_differential!($dM, $diffcache)
+        dynamics_bias_differential!($dc, $diffcache)
     end evals = 10
 
     return suite

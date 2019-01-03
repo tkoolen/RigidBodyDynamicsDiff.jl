@@ -119,10 +119,6 @@ function update_jac_state!(cache::DifferentialCache{Tag, T}, jac_index::Integer,
     state = cache.state
     dualstate = cache.dualstates[jac_index]
     setdirty!(dualstate)
-    copyto!(dualstate.q, state.q)
-    copyto!(dualstate.v, state.v)
-    copyto!(dualstate.s, state.s)
-    dualstate.q[v_index] = ForwardDiff.Dual{Tag}(state.q[v_index], one(T))
 
     k = velocity_index_to_joint_id(state, v_index)
     twist = Twist(state.motion_subspaces.data[v_index], SVector(one(T)))
