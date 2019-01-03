@@ -113,15 +113,35 @@ function DifferentialCache{Tag}(state::MechanismState{T}) where {Tag, T}
     DifferentialCache(state, dualstates, dualresults, v_to_q̇_jacobian)
 end
 
-function update_jac_state!(cache::DifferentialCache{Tag, T}, jac_index::Integer, v_index::Integer;
-        transforms::Bool=false, motion_subspaces::Bool=false, inertias::Bool=false, crb_inertias::Bool=false,
-        twists_wrt_world::Bool=false, bias_accelerations_wrt_world::Bool=false) where {Tag, T}
-    state = cache.state
-    dualstate = cache.dualstates[jac_index]
-    setdirty!(dualstate)
+function copy_differential_column!(dest::Matrix, src::AbstractVector{<:Dual}, destcol::Integer)
+    deststart = (destcol - 1) * size(dest, 1)
+    @inbounds @simd for row in eachindex(src)
+        dest[deststart + row] = ForwardDiff.partials(src[row], 1)
+    end
+end
 
+function copy_differential_column!(dest::Matrix, src::Symmetric{<:Dual}, destcol::Integer)
+    deststart = (destcol - 1) * size(dest, 1)
+    n = size(src, 1)
+    upper = src.uplo === 'u'
+    @inbounds for col in Base.OneTo(n)
+        @simd for row in col : n
+            u_index = (row - 1) * n + col
+            l_index = (col - 1) * n + row
+            data_index = ifelse(upper, u_index, l_index)
+            val = ForwardDiff.partials(src.data[data_index], 1)
+            dest[deststart + u_index] = val
+            dest[deststart + l_index] = val
+        end
+    end
+end
+
+function dual_state_init!(dualstate::MechanismState{<:Dual{Tag}}, state::MechanismState{T}, v_index::Integer,
+        transforms::Bool, motion_subspaces::Bool, inertias::Bool, crb_inertias::Bool, twists::Bool, bias_accelerations::Bool) where {Tag, T}
+    setdirty!(dualstate)
     k = velocity_index_to_joint_id(state, v_index)
     twist = Twist(state.motion_subspaces.data[v_index], SVector(one(T)))
+
     if transforms
         dtransforms_to_root = dualstate.transforms_to_root
         @inbounds for i in state.treejointids
@@ -191,7 +211,7 @@ function update_jac_state!(cache::DifferentialCache{Tag, T}, jac_index::Integer,
         dualstate.crb_inertias.dirty = false
     end
 
-    if twists_wrt_world
+    if twists
         dtwists_wrt_world = dualstate.twists_wrt_world
         @inbounds for i in state.treejointids
             κ_i = state.ancestor_joint_masks[i]
@@ -206,7 +226,7 @@ function update_jac_state!(cache::DifferentialCache{Tag, T}, jac_index::Integer,
         dualstate.twists_wrt_world.dirty = false
     end
 
-    if bias_accelerations_wrt_world
+    if bias_accelerations
         dbias_accelerations_wrt_world = dualstate.bias_accelerations_wrt_world
         @inbounds for i in state.treejointids
             κ_i = state.ancestor_joint_masks[i]
@@ -221,73 +241,43 @@ function update_jac_state!(cache::DifferentialCache{Tag, T}, jac_index::Integer,
         dualstate.bias_accelerations_wrt_world.dirty = false
     end
 
-    return nothing
+    nothing
 end
 
-function copy_differential_column!(dest::Matrix, src::AbstractVector{<:Dual}, destcol::Integer)
-    deststart = (destcol - 1) * size(dest, 1)
-    @inbounds @simd for row in eachindex(src)
-        dest[deststart + row] = ForwardDiff.partials(src[row], 1)
+function threaded_differential!(f::F, differential::Matrix, cache::DifferentialCache;
+        transforms::Bool=false, motion_subspaces::Bool=false, inertias::Bool=false, crb_inertias::Bool=false, twists::Bool=false, bias_accelerations::Bool=false) where F
+    let state = cache.state
+        transforms && update_transforms!(state)
+        motion_subspaces && update_motion_subspaces!(state)
+        inertias && update_spatial_inertias!(state)
+        crb_inertias && update_crb_inertias!(state)
+        twists && update_twists_wrt_world!(state)
+        bias_accelerations && update_bias_accelerations_wrt_world!(state)
     end
-end
-
-function copy_differential_column!(dest::Matrix, src::Symmetric{<:Dual}, destcol::Integer)
-    deststart = (destcol - 1) * size(dest, 1)
-    n = size(src, 1)
-    upper = src.uplo === 'u'
-    @inbounds for col in Base.OneTo(n)
-        @simd for row in col : n
-            u_index = (row - 1) * n + col
-            l_index = (col - 1) * n + row
-            data_index = ifelse(upper, u_index, l_index)
-            val = ForwardDiff.partials(src.data[data_index], 1)
-            dest[deststart + u_index] = val
-            dest[deststart + l_index] = val
+    let differential = differential, cache = cache, state = cache.state
+        nv = num_velocities(state)
+        Threads.@threads for v_index in Base.OneTo(nv)
+            id = Threads.threadid()
+            dualstate = cache.dualstates[id]
+            dual_state_init!(dualstate, state, v_index, transforms, motion_subspaces, inertias, crb_inertias, twists, bias_accelerations)
+            dualresult = cache.dualresults[id]
+            copy_differential_column!(differential, f(dualresult, dualstate), v_index)
+            nothing
         end
     end
+    return differential
 end
 
 function mass_matrix_differential!(differential::Matrix, cache::DifferentialCache)
-    state = cache.state
-    nv = num_velocities(state)
-    @boundscheck size(differential) === (nv^2, nv) || throw(DimensionMismatch())
-    update_motion_subspaces!(state)
-    update_crb_inertias!(state)
-    # velocity_to_configuration_derivative_jacobian!(cache.v_to_q̇_jacobian, state)
-    let cache=cache, nv = nv
-        Threads.@threads for v_index in Base.OneTo(nv)
-            id = Threads.threadid()
-            update_jac_state!(cache, id, v_index, motion_subspaces=true, crb_inertias=true)
-            @inbounds dualstate = cache.dualstates[id]
-            @inbounds dualresult = cache.dualresults[id]
-            mass_matrix!(dualresult, dualstate)
-            copy_differential_column!(differential, dualresult.massmatrix, v_index)
-        end
-    end
-    differential
+    nv = num_velocities(cache.state)
+    size(differential) == (nv^2, nv) || throw(DimensionMismatch())
+    threaded_differential!(mass_matrix!, differential, cache; motion_subspaces=true, crb_inertias=true)
 end
 
 function dynamics_bias_differential!(differential::Matrix, cache::DifferentialCache)
-    state = cache.state
-    nv = num_velocities(state)
-    @boundscheck size(differential) === (nv, nv) || throw(DimensionMismatch())
-    update_transforms!(state)
-    update_motion_subspaces!(state)
-    update_spatial_inertias!(state)
-    update_twists_wrt_world!(state)
-    update_bias_accelerations_wrt_world!(state)
-    # velocity_to_configuration_derivative_jacobian!(cache.v_to_q̇_jacobian, state)
-    let cache=cache, nv = nv
-        Threads.@threads for v_index in Base.OneTo(nv)
-            id = Threads.threadid()
-            update_jac_state!(cache, id, v_index, transforms=true, motion_subspaces=true, inertias=true, bias_accelerations_wrt_world=true, twists_wrt_world=true)
-            @inbounds dualstate = cache.dualstates[id]
-            @inbounds dualresult = cache.dualresults[id]
-            dynamics_bias!(dualresult, dualstate)
-            copy_differential_column!(differential, dualresult.dynamicsbias, v_index)
-        end
-    end
-    differential
+    nv = num_velocities(cache.state)
+    size(differential) == (nv, nv) || throw(DimensionMismatch())
+    threaded_differential!(dynamics_bias!, differential, cache; transforms=true, motion_subspaces=true, inertias=true, bias_accelerations=true, twists=true)
 end
 
 end # module
