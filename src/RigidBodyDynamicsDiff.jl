@@ -95,7 +95,9 @@ end
 
 function DifferentialCache{Tag}(state::MechanismState{T}) where {Tag, T}
     mechanism = state.mechanism
-    mapreduce(has_fixed_subspaces, &, state.treejoints, init=true) || error("Can only handle Mechanisms with fixed motion subspaces.")
+    if mapreduce(has_fixed_subspaces, &, state.treejoints, init=true)
+        throw(ArgumentError("Can only handle Mechanisms with fixed motion subspaces."))
+    end
     D = ForwardDiff.Dual{Tag, T, 1}
     n = Threads.nthreads()
     dualstates = Vector{typeof(MechanismState{D}(mechanism))}(undef, n)
@@ -137,7 +139,8 @@ function copy_differential_column!(dest::Matrix, src::Symmetric{<:Dual}, destcol
 end
 
 function dual_state_init!(dualstate::MechanismState{<:Dual{Tag}}, state::MechanismState{T}, v_index::Integer,
-        transforms::Bool, motion_subspaces::Bool, inertias::Bool, crb_inertias::Bool, twists::Bool, bias_accelerations::Bool) where {Tag, T}
+        transforms::Bool, motion_subspaces::Bool, inertias::Bool, crb_inertias::Bool,
+        twists::Bool, bias_accelerations::Bool) where {Tag, T}
     setdirty!(dualstate)
     k = velocity_index_to_joint_id(state, v_index)
     twist = Twist(state.motion_subspaces.data[v_index], SVector(one(T)))
@@ -190,7 +193,7 @@ function dual_state_init!(dualstate::MechanismState{<:Dual{Tag}}, state::Mechani
     end
 
     if crb_inertias
-        dcrbinertias = dualstate.crb_inertias
+        dcrb_inertias = dualstate.crb_inertias
         κ_k = state.ancestor_joint_masks[k]
         @inbounds for i in state.treejointids
             κ_i = state.ancestor_joint_masks[i]
@@ -203,39 +206,39 @@ function dual_state_init!(dualstate::MechanismState{<:Dual{Tag}}, state::Mechani
                 Iω = map(Dual{Tag}, Ic_i.moment, map(ForwardDiff.partials, Ic_p_dual.moment))
                 mc = map(Dual{Tag}, Ic_i.cross_part, map(ForwardDiff.partials, Ic_p_dual.cross_part))
                 m = Dual{Tag}(Ic_i.mass, ForwardDiff.partials(Ic_p_dual.mass))
-                dcrbinertias[bodyid] = SpatialInertia(Ic_i.frame, Iω, mc, m)
+                dcrb_inertias[bodyid] = SpatialInertia(Ic_i.frame, Iω, mc, m)
             else
-                dcrbinertias[bodyid] = Ic_i
+                dcrb_inertias[bodyid] = Ic_i
             end
         end
         dualstate.crb_inertias.dirty = false
     end
 
     if twists
-        dtwists_wrt_world = dualstate.twists_wrt_world
+        dtwists = dualstate.twists_wrt_world
         @inbounds for i in state.treejointids
             κ_i = state.ancestor_joint_masks[i]
             bodyid = successorid(i, state)
             twist_i = twist_wrt_world(state, bodyid, false)
             if κ_i[k]
-                dtwists_wrt_world[bodyid] = timederiv(twist_i, twist, Tag)
+                dtwists[bodyid] = timederiv(twist_i, twist, Tag)
             else
-                dtwists_wrt_world[bodyid] = twist_i
+                dtwists[bodyid] = twist_i
             end
         end
         dualstate.twists_wrt_world.dirty = false
     end
 
     if bias_accelerations
-        dbias_accelerations_wrt_world = dualstate.bias_accelerations_wrt_world
+        dbias_accelerations = dualstate.bias_accelerations_wrt_world
         @inbounds for i in state.treejointids
             κ_i = state.ancestor_joint_masks[i]
             bodyid = successorid(i, state)
             accel_i = bias_acceleration(state, bodyid, false)
             if κ_i[k]
-                dbias_accelerations_wrt_world[bodyid] = timederiv(accel_i, twist, Tag)
+                dbias_accelerations[bodyid] = timederiv(accel_i, twist, Tag)
             else
-                dbias_accelerations_wrt_world[bodyid] = accel_i
+                dbias_accelerations[bodyid] = accel_i
             end
         end
         dualstate.bias_accelerations_wrt_world.dirty = false
@@ -245,7 +248,8 @@ function dual_state_init!(dualstate::MechanismState{<:Dual{Tag}}, state::Mechani
 end
 
 function threaded_differential!(f::F, differential::Matrix, cache::DifferentialCache;
-        transforms::Bool=false, motion_subspaces::Bool=false, inertias::Bool=false, crb_inertias::Bool=false, twists::Bool=false, bias_accelerations::Bool=false) where F
+        transforms::Bool=false, motion_subspaces::Bool=false, inertias::Bool=false, crb_inertias::Bool=false,
+        twists::Bool=false, bias_accelerations::Bool=false) where F
     let state = cache.state
         transforms && update_transforms!(state)
         motion_subspaces && update_motion_subspaces!(state)
@@ -259,7 +263,8 @@ function threaded_differential!(f::F, differential::Matrix, cache::DifferentialC
         Threads.@threads for v_index in Base.OneTo(nv)
             id = Threads.threadid()
             dualstate = cache.dualstates[id]
-            dual_state_init!(dualstate, state, v_index, transforms, motion_subspaces, inertias, crb_inertias, twists, bias_accelerations)
+            dual_state_init!(dualstate, state, v_index, transforms, motion_subspaces,
+                inertias, crb_inertias, twists, bias_accelerations)
             dualresult = cache.dualresults[id]
             copy_differential_column!(differential, f(dualresult, dualstate), v_index)
             nothing
@@ -277,7 +282,8 @@ end
 function dynamics_bias_differential!(differential::Matrix, cache::DifferentialCache)
     nv = num_velocities(cache.state)
     size(differential) == (nv, nv) || throw(DimensionMismatch())
-    threaded_differential!(dynamics_bias!, differential, cache; transforms=true, motion_subspaces=true, inertias=true, bias_accelerations=true, twists=true)
+    threaded_differential!(dynamics_bias!, differential, cache; transforms=true, motion_subspaces=true,
+        inertias=true, bias_accelerations=true, twists=true)
 end
 
 end # module
