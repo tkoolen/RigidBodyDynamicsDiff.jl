@@ -11,7 +11,7 @@ using ForwardDiff
 using LinearAlgebra
 using StaticArrays
 
-using RigidBodyDynamics: successorid, isdirty, Spatial.colwise, Spatial.hat, Spatial.se3_commutator
+using RigidBodyDynamics: predsucc, successorid, isdirty, Spatial.colwise, Spatial.hat, Spatial.se3_commutator
 using RigidBodyDynamics: update_transforms!, update_bias_accelerations_wrt_world!, update_twists_wrt_world!
 using RigidBodyDynamics: update_motion_subspaces!, update_spatial_inertias!, update_crb_inertias!
 using RigidBodyDynamics: configuration_index_to_joint_id, velocity_index_to_joint_id
@@ -107,7 +107,7 @@ function DifferentialCache{Tag}(state::MechanismState{T}) where {Tag, T}
     n = Threads.nthreads()
     dualstates = Vector{typeof(MechanismState{D}(mechanism))}(undef, n)
     dualresults = Vector{typeof(DynamicsResult{D}(mechanism))}(undef, n)
-    Threads.@threads for i = 1 : n
+    for i = 1 : n
         # Create MechanismStates and DynamicsResults in separate threads to avoid the possibility of false sharing.
         id = Threads.threadid()
         dualstate = dualstates[id] = MechanismState{D}(mechanism)
@@ -154,7 +154,7 @@ function dual_state_init!(dualstate::MechanismState{<:Dual{Tag}}, state::Mechani
     twist = Twist(state.motion_subspaces.data[v_index], SVector(one(T)))
 
     # TODO:
-    if twists || bias_accelerations
+    if bias_accelerations
         transforms = true
     end
 
@@ -227,20 +227,24 @@ function dual_state_init!(dualstate::MechanismState{<:Dual{Tag}}, state::Mechani
         dualstate.crb_inertias.dirty = false
     end
 
-    # if twists
-    #     dtwists = dualstate.twists_wrt_world
-    #     @inbounds for i in state.treejointids
-    #         κ_i = state.ancestor_joint_masks[i]
-    #         bodyid = successorid(i, state)
-    #         twist_i = twist_wrt_world(state, bodyid, false)
-    #         if κ_i[k]
-    #             dtwists[bodyid] = timederiv(twist_i, twist, Tag)
-    #         else
-    #             dtwists[bodyid] = twist_i
-    #         end
-    #     end
-    #     dualstate.twists_wrt_world.dirty = false
-    # end
+    if twists
+        dtwists = dualstate.twists_wrt_world
+        κ_k = state.ancestor_joint_masks[k]
+        @inbounds for i in state.treejointids
+            κ_i = state.ancestor_joint_masks[i]
+            bodyid = successorid(i, state)
+            twist_i = twist_wrt_world(state, bodyid, false)
+            if κ_i[k]
+                relative_twist_dual = timederiv(relative_twist(state, bodyid, first(predsucc(k, state))), twist, Tag)
+                ω = map(Dual{Tag}, twist_i.angular, map(ForwardDiff.partials, relative_twist_dual.angular))
+                v = map(Dual{Tag}, twist_i.linear, map(ForwardDiff.partials, relative_twist_dual.linear))
+                dtwists[bodyid] = Twist(twist_i.body, twist_i.base, twist_i.frame, ω, v)
+            else
+                dtwists[bodyid] = twist_i
+            end
+        end
+        dualstate.twists_wrt_world.dirty = false
+    end
 
     # if bias_accelerations
     #     dbias_accelerations = dualstate.bias_accelerations_wrt_world
