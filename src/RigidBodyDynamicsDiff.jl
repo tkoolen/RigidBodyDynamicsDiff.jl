@@ -3,7 +3,8 @@ module RigidBodyDynamicsDiff
 export
     DifferentialCache,
     mass_matrix_differential!,
-    dynamics_bias_differential!
+    dynamics_bias_differential!,
+    inverse_dynamics_differential!
 
 using RigidBodyDynamics
 using ForwardDiff
@@ -19,7 +20,7 @@ using RigidBodyDynamics.CustomCollections: SegmentedBlockDiagonalMatrix
 using ForwardDiff: Dual
 
 # TODO:
-# * frame checks for timederiv methods
+# * more frame checks for timederiv methods
 
 function timederiv(H::Transform3D, twist::Twist, ::Type{Tag}) where Tag
     # @framecheck H.from twist.body
@@ -95,7 +96,7 @@ end
 
 function DifferentialCache{Tag}(state::MechanismState{T}) where {Tag, T}
     mechanism = state.mechanism
-    if mapreduce(has_fixed_subspaces, &, state.treejoints, init=true)
+    if !mapreduce(has_fixed_subspaces, &, state.treejoints, init=true)
         throw(ArgumentError("Can only handle Mechanisms with fixed motion subspaces."))
     end
     D = ForwardDiff.Dual{Tag, T, 1}
@@ -247,9 +248,8 @@ function dual_state_init!(dualstate::MechanismState{<:Dual{Tag}}, state::Mechani
     nothing
 end
 
-function threaded_differential!(f::F, differential::Matrix, cache::DifferentialCache;
-        transforms::Bool=false, motion_subspaces::Bool=false, inertias::Bool=false, crb_inertias::Bool=false,
-        twists::Bool=false, bias_accelerations::Bool=false) where F
+function threaded_differential!(f::F, dest::Matrix, cache::DifferentialCache;
+        transforms::Bool=false, motion_subspaces::Bool=false, inertias::Bool=false, crb_inertias::Bool=false, twists::Bool=false, bias_accelerations::Bool=false) where F
     let state = cache.state
         transforms && update_transforms!(state)
         motion_subspaces && update_motion_subspaces!(state)
@@ -258,7 +258,7 @@ function threaded_differential!(f::F, differential::Matrix, cache::DifferentialC
         twists && update_twists_wrt_world!(state)
         bias_accelerations && update_bias_accelerations_wrt_world!(state)
     end
-    let differential = differential, cache = cache, state = cache.state
+    let dest = dest, cache = cache, state = cache.state
         nv = num_velocities(state)
         Threads.@threads for v_index in Base.OneTo(nv)
             id = Threads.threadid()
@@ -266,24 +266,39 @@ function threaded_differential!(f::F, differential::Matrix, cache::DifferentialC
             dual_state_init!(dualstate, state, v_index, transforms, motion_subspaces,
                 inertias, crb_inertias, twists, bias_accelerations)
             dualresult = cache.dualresults[id]
-            copy_differential_column!(differential, f(dualresult, dualstate), v_index)
+            copy_differential_column!(dest, f(dualresult, dualstate), v_index)
             nothing
         end
     end
-    return differential
+    return dest
 end
 
-function mass_matrix_differential!(differential::Matrix, cache::DifferentialCache)
+function mass_matrix_differential!(dest::Matrix, cache::DifferentialCache)
     nv = num_velocities(cache.state)
-    size(differential) == (nv^2, nv) || throw(DimensionMismatch())
-    threaded_differential!(mass_matrix!, differential, cache; motion_subspaces=true, crb_inertias=true)
+    size(dest) == (nv^2, nv) || throw(DimensionMismatch())
+    threaded_differential!(mass_matrix!, dest, cache;
+        motion_subspaces=true, crb_inertias=true)
 end
 
-function dynamics_bias_differential!(differential::Matrix, cache::DifferentialCache)
+function dynamics_bias_differential!(dest::Matrix, cache::DifferentialCache)
     nv = num_velocities(cache.state)
-    size(differential) == (nv, nv) || throw(DimensionMismatch())
-    threaded_differential!(dynamics_bias!, differential, cache; transforms=true, motion_subspaces=true,
-        inertias=true, bias_accelerations=true, twists=true)
+    size(dest) == (nv, nv) || throw(DimensionMismatch())
+    threaded_differential!(dynamics_bias!, dest, cache;
+        motion_subspaces=true, inertias=true, bias_accelerations=true, twists=true)
+end
+
+function inverse_dynamics_differential!(dest::Matrix, v̇::SegmentedVector{JointID}, cache::DifferentialCache)
+    nv = num_velocities(cache.state)
+    size(dest) == (nv, nv) || throw(DimensionMismatch())
+    f = let v̇ = v̇
+        function (result, state)
+            # TODO: abusing the dynamicsbias and totalwrenches fields of DynamicsResult.
+            inverse_dynamics!(result.dynamicsbias, result.jointwrenches, result.accelerations, state, v̇, result.totalwrenches)
+            result.dynamicsbias
+        end
+    end
+    threaded_differential!(f, dest, cache;
+        transforms=true, motion_subspaces=true, inertias=true, crb_inertias=true, bias_accelerations=true, twists=true)
 end
 
 end # module
