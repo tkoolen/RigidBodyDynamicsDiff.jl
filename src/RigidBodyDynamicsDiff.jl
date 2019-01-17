@@ -30,9 +30,13 @@ function timederiv(H::Transform3D, twist::Twist, ::Type{Tag}) where Tag
     p = translation(H)
     ω = angular(twist)
     v = linear(twist)
-    top = [colwise(×, ω, R) ω × p + v]
-    bottom = zeros(similar_type(top, Size(1, 4)))
-    dH = [top; bottom]
+    dR = colwise(×, ω, R)
+    dp = ω × p + v
+    T = promote_type(eltype(dR), eltype(dp))
+    dH = hcat(
+        vcat(dR, zeros(similar_type(dR, Size(1, 3)))),
+        vcat(dp, zeros(similar_type(dR, Size(1, 1))))
+    )
     Transform3D(H.from, H.to,
         map(Dual{Tag}, H.mat, dH))
 end
@@ -142,9 +146,17 @@ end
 function dual_state_init!(dualstate::MechanismState{<:Dual{Tag}}, state::MechanismState{T}, v_index::Integer,
         transforms::Bool, motion_subspaces::Bool, inertias::Bool, crb_inertias::Bool,
         twists::Bool, bias_accelerations::Bool) where {Tag, T}
+    dualstate.q .= NaN # TODO: actually compute this?
+    copyto!(dualstate.v, state.v)
+    copyto!(dualstate.s, state.s)
     setdirty!(dualstate)
     k = velocity_index_to_joint_id(state, v_index)
     twist = Twist(state.motion_subspaces.data[v_index], SVector(one(T)))
+
+    # TODO:
+    if twists || bias_accelerations
+        transforms = true
+    end
 
     if transforms
         dtransforms_to_root = dualstate.transforms_to_root
@@ -215,41 +227,42 @@ function dual_state_init!(dualstate::MechanismState{<:Dual{Tag}}, state::Mechani
         dualstate.crb_inertias.dirty = false
     end
 
-    if twists
-        dtwists = dualstate.twists_wrt_world
-        @inbounds for i in state.treejointids
-            κ_i = state.ancestor_joint_masks[i]
-            bodyid = successorid(i, state)
-            twist_i = twist_wrt_world(state, bodyid, false)
-            if κ_i[k]
-                dtwists[bodyid] = timederiv(twist_i, twist, Tag)
-            else
-                dtwists[bodyid] = twist_i
-            end
-        end
-        dualstate.twists_wrt_world.dirty = false
-    end
+    # if twists
+    #     dtwists = dualstate.twists_wrt_world
+    #     @inbounds for i in state.treejointids
+    #         κ_i = state.ancestor_joint_masks[i]
+    #         bodyid = successorid(i, state)
+    #         twist_i = twist_wrt_world(state, bodyid, false)
+    #         if κ_i[k]
+    #             dtwists[bodyid] = timederiv(twist_i, twist, Tag)
+    #         else
+    #             dtwists[bodyid] = twist_i
+    #         end
+    #     end
+    #     dualstate.twists_wrt_world.dirty = false
+    # end
 
-    if bias_accelerations
-        dbias_accelerations = dualstate.bias_accelerations_wrt_world
-        @inbounds for i in state.treejointids
-            κ_i = state.ancestor_joint_masks[i]
-            bodyid = successorid(i, state)
-            accel_i = bias_acceleration(state, bodyid, false)
-            if κ_i[k]
-                dbias_accelerations[bodyid] = timederiv(accel_i, twist, Tag)
-            else
-                dbias_accelerations[bodyid] = accel_i
-            end
-        end
-        dualstate.bias_accelerations_wrt_world.dirty = false
-    end
+    # if bias_accelerations
+    #     dbias_accelerations = dualstate.bias_accelerations_wrt_world
+    #     @inbounds for i in state.treejointids
+    #         κ_i = state.ancestor_joint_masks[i]
+    #         bodyid = successorid(i, state)
+    #         accel_i = bias_acceleration(state, bodyid, false)
+    #         if κ_i[k]
+    #             dbias_accelerations[bodyid] = timederiv(accel_i, twist, Tag)
+    #         else
+    #             dbias_accelerations[bodyid] = accel_i
+    #         end
+    #     end
+    #     dualstate.bias_accelerations_wrt_world.dirty = false
+    # end
 
     nothing
 end
 
 function threaded_differential!(f::F, dest::Matrix, cache::DifferentialCache;
         transforms::Bool=false, motion_subspaces::Bool=false, inertias::Bool=false, crb_inertias::Bool=false, twists::Bool=false, bias_accelerations::Bool=false) where F
+    velocity_to_configuration_derivative_jacobian!(cache.v_to_q̇_jacobian, cache.state)
     let state = cache.state
         transforms && update_transforms!(state)
         motion_subspaces && update_motion_subspaces!(state)

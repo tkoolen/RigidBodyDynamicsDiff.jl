@@ -32,24 +32,27 @@ struct MyTag end
 
     configs = []
     push!(configs, (
+        "mass_matrix",
         mass_matrix_differential!,
         forwarddiff_compatible(mass_matrix!, statecache, resultcache, normalize),
         zeros(nv * nv)
     ))
     push!(configs, (
+        "dynamics_bias",
         dynamics_bias_differential!,
         forwarddiff_compatible(dynamics_bias!, statecache, resultcache, v, normalize),
         zeros(nv)
     ))
 
     push!(configs, (
+        "inverse_dynamics",
         (dest, cache) -> inverse_dynamics_differential!(dest, v̇, cache),
         forwarddiff_compatible(inverse_dynamics!, statecache, resultcache, v, v̇, normalize),
         zeros(nv)
     ))
 
-    for (differentialfun, fdfun, out) in configs
-        @testset "$differentialfun" begin
+    for (name, differentialfun, fdfun, out) in configs
+        @testset "$name" begin
             diffcache = DifferentialCache{MyTag}(state)
 
             fdjacresult = DiffResults.JacobianResult(out, q)
