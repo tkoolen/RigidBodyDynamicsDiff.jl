@@ -313,8 +313,12 @@ function dynamics_differential!(dest::Matrix, result::DynamicsResult, state::Mec
     size(dest) == (nv, nv) || throw(DimensionMismatch())
     dynamics!(result, state, τ)
     inverse_dynamics_differential!(dest, state, result.v̇, cache)
-    LinearAlgebra.LAPACK.potrs!(result.massmatrix.uplo, result.L, dest)
-    @inbounds map!(-, dest, dest)
+    uplo = result.massmatrix.uplo
+    # LAPACK.potrs!(result.massmatrix.uplo, result.L, dest)
+    # @inbounds map!(-, dest, dest)
+    LAPACK.potri!(uplo, result.L)
+    @inbounds dest .= BLAS.symm('L', uplo, -1.0, result.L, dest)
+    # BLAS.symm!('L', uplo, 'N', 'N', -1, result.L, dest)
     return dest
 end
 
