@@ -43,3 +43,18 @@ function forwarddiff_compatible(::typeof(inverse_dynamics!),
         copyto!(out, result.dynamicsbias)
     end
 end
+
+function forwarddiff_compatible(::typeof(dynamics!),
+    statecache::StateCache, resultcache::DynamicsResultCache, v::AbstractVector, τ::AbstractVector, normalize = Ref(false))
+    function (out::AbstractVector, q::AbstractVector{T}) where T
+        state = statecache[T]
+        result = resultcache[T]
+        set_configuration!(state, q)
+        set_velocity!(state, v)
+        if normalize[]
+            normalize_configuration!(state)
+        end
+        dynamics!(result, state, τ)
+        copyto!(out, result.v̇)
+    end
+end

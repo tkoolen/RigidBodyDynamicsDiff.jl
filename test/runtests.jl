@@ -19,10 +19,12 @@ struct MyTag end
     urdf = joinpath(dirname(pathof(RigidBodyDynamics)), "..", "test", "urdf", "atlas.urdf")
     mechanism = parse_urdf(urdf, scalar_type=T, root_joint_type=QuaternionFloating{T}())
     state = MechanismState{T}(mechanism)
+    result = DynamicsResult{T}(mechanism)
     rand!(state)
     q = configuration(state)
     v = velocity(state)
     v̇ = rand!(similar(velocity(state)))
+    τ = rand!(similar(velocity(state)))
     nv = num_velocities(mechanism)
     statecache = StateCache(mechanism)
     resultcache = DynamicsResultCache(mechanism)
@@ -41,29 +43,34 @@ struct MyTag end
         forwarddiff_compatible(dynamics_bias!, statecache, resultcache, v, normalize),
         zeros(nv)
     ))
-
     push!(configs, (
         "inverse_dynamics",
-        (dest, cache) -> inverse_dynamics_differential!(dest, v̇, cache),
+        (dest, state, cache) -> inverse_dynamics_differential!(dest, state, v̇, cache),
         forwarddiff_compatible(inverse_dynamics!, statecache, resultcache, v, v̇, normalize),
+        zeros(nv)
+    ))
+    push!(configs, (
+        "dynamics",
+        (dest, state, cache) -> dynamics_differential!(dest, result, state, τ, cache),
+        forwarddiff_compatible(dynamics!, statecache, resultcache, v, τ, normalize),
         zeros(nv)
     ))
 
     for (name, differentialfun, fdfun, out) in configs
         @testset "$name" begin
-            diffcache = DifferentialCache{MyTag}(state)
+            diffcache = DifferentialCache{MyTag}(mechanism)
 
             fdjacresult = DiffResults.JacobianResult(out, q)
             fdconfig = ForwardDiff.JacobianConfig(fdfun, out, q, ForwardDiff.Chunk(1))
             differential = fill(T(NaN), length(out), nv)
-            differentialfun(differential, diffcache)
+            differentialfun(differential, state, diffcache)
 
             # Without normalization:
             normalize[] = false
             ForwardDiff.jacobian!(fdjacresult, fdfun, out, q, fdconfig)
             fdjac = DiffResults.jacobian(fdjacresult)
             velocity_to_configuration_derivative_jacobian(state)
-            @test differential ≈ fdjac * velocity_to_configuration_derivative_jacobian(state) atol = 1e-10
+            @test differential ≈ fdjac * velocity_to_configuration_derivative_jacobian(state) atol = 1e-8
 
             # Without normalization, the normal component in dM is zero (since we're only working
             # in the tangent plane), but the ForwardDiff version *does* have a normal component,
@@ -74,8 +81,8 @@ struct MyTag end
             normalize[] = true
             ForwardDiff.jacobian!(fdjacresult, fdfun, out, q, fdconfig)
             fdjac = DiffResults.jacobian(fdjacresult)
-            @test differential * configuration_derivative_to_velocity_jacobian(state) ≈ fdjac atol = 1e-10
-            @test differential ≈ fdjac * velocity_to_configuration_derivative_jacobian(state) atol = 1e-10
+            @test differential * configuration_derivative_to_velocity_jacobian(state) ≈ fdjac atol = 1e-8
+            @test differential ≈ fdjac * velocity_to_configuration_derivative_jacobian(state) atol = 1e-8
         end
     end
 end
