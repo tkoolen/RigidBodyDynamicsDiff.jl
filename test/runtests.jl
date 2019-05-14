@@ -10,11 +10,9 @@ using RigidBodyDynamics: configuration_derivative_to_velocity_jacobian
 
 include(joinpath(@__DIR__, "..", "test", "forwarddiff_compatible.jl"))
 
-@show Threads.nthreads()
-
 struct MyTag end
 
-@testset "differential" begin
+@testset "differential (nthreads = $(Threads.nthreads()))" begin
     Random.seed!(1)
 
     T = Float64
@@ -64,6 +62,7 @@ struct MyTag end
             normalize[] = false
             ForwardDiff.jacobian!(fdjacresult, fdfun, out, q, fdconfig)
             fdjac = DiffResults.jacobian(fdjacresult)
+            velocity_to_configuration_derivative_jacobian(state)
             @test differential ≈ fdjac * velocity_to_configuration_derivative_jacobian(state) atol = 1e-10
 
             # Without normalization, the normal component in dM is zero (since we're only working
